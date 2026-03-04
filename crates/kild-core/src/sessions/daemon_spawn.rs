@@ -31,6 +31,10 @@ pub(super) struct AgentSpawnParams<'a> {
     pub task_list_id: Option<&'a str>,
     pub project_id: &'a str,
     pub kild_config: &'a KildConfig,
+    /// CLI override for initial PTY rows (daemon sessions only).
+    pub rows: Option<u16>,
+    /// CLI override for initial PTY columns (daemon sessions only).
+    pub cols: Option<u16>,
 }
 
 /// Spawn an agent in a daemon-managed PTY.
@@ -84,6 +88,7 @@ pub(super) fn spawn_daemon_agent(
     );
 
     // 7. Create PTY session via daemon IPC
+    let (cols, rows) = resolve_pty_size(params);
     let daemon_request = crate::daemon::client::DaemonCreateRequest {
         request_id: params.spawn_id,
         session_id: params.spawn_id,
@@ -91,8 +96,8 @@ pub(super) fn spawn_daemon_agent(
         command: &req_params.cmd,
         args: &req_params.cmd_args,
         env_vars: &req_params.env_vars,
-        rows: 24,
-        cols: 80,
+        rows,
+        cols,
         use_login_shell: req_params.use_login_shell,
     };
     let daemon_result =
@@ -256,6 +261,50 @@ fn read_scrollback_tail(daemon_session_id: &str) -> String {
                 error = %e,
             );
             String::new()
+        }
+    }
+}
+
+/// Resolve PTY dimensions using the priority chain (per dimension):
+/// CLI flag > config default > terminal ioctl > hardcoded 80×24.
+fn resolve_pty_size(params: &AgentSpawnParams<'_>) -> (u16, u16) {
+    let cfg = &params.kild_config.daemon;
+    let (terminal_cols, terminal_rows) = query_terminal_size();
+
+    let cols = params.cols.or(cfg.default_cols).unwrap_or(terminal_cols);
+    let rows = params.rows.or(cfg.default_rows).unwrap_or(terminal_rows);
+
+    debug!(
+        event = "core.session.pty_size_resolved",
+        cols = cols,
+        rows = rows,
+    );
+
+    (cols, rows)
+}
+
+/// Query the calling terminal's dimensions.
+///
+/// Returns `(cols, rows)` from the TTY attached to stdout. Falls back to `(80, 24)`
+/// when stdout is not a terminal (e.g., UI process, piped output, CI).
+fn query_terminal_size() -> (u16, u16) {
+    use nix::libc;
+    // SAFETY: zeroed winsize is valid, and TIOCGWINSZ only reads kernel state.
+    unsafe {
+        let mut winsize: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut winsize) == 0
+            && winsize.ws_col > 0
+            && winsize.ws_row > 0
+        {
+            (winsize.ws_col, winsize.ws_row)
+        } else {
+            debug!(
+                event = "core.session.pty_size_ioctl_fallback",
+                cols = 80,
+                rows = 24,
+                "stdout is not a TTY or returned zero dimensions, using 80x24 default"
+            );
+            (80, 24)
         }
     }
 }

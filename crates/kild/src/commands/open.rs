@@ -20,6 +20,8 @@ pub(crate) fn handle_open_command(matches: &ArgMatches) -> Result<(), Box<dyn st
     let yolo = matches.get_flag("yolo");
     let no_attach = matches.get_flag("no-attach");
     let initial_prompt = matches.get_one::<String>("initial-prompt");
+    let rows = matches.get_one::<u16>("rows").copied();
+    let cols = matches.get_one::<u16>("cols").copied();
 
     // Check for --all flag first
     if matches.get_flag("all") {
@@ -33,15 +35,15 @@ pub(crate) fn handle_open_command(matches: &ArgMatches) -> Result<(), Box<dyn st
 
     info!(event = "cli.open_started", branch = branch, mode = ?mode);
 
-    match session_ops::open_session(
-        branch,
-        mode.clone(),
-        runtime_mode,
-        resume,
-        yolo,
-        no_attach,
-        initial_prompt.map(|s| s.as_str()),
-    ) {
+    let request = kild_core::sessions::types::OpenSessionRequest::new(branch, mode.clone())
+        .with_runtime_mode(runtime_mode)
+        .with_resume(resume)
+        .with_yolo(yolo)
+        .with_no_attach(no_attach)
+        .with_initial_prompt(initial_prompt.cloned())
+        .with_pty_size(rows, cols);
+
+    match session_ops::open_session(&request) {
         Ok(session) => {
             match mode {
                 kild_core::OpenMode::BareShell => {
@@ -132,15 +134,15 @@ fn handle_open_all(
     let mut errors: Vec<FailedOperation> = Vec::new();
 
     for session in stopped {
-        match session_ops::open_session(
-            &session.branch,
+        let request = kild_core::sessions::types::OpenSessionRequest::new(
+            session.branch.to_string(),
             mode.clone(),
-            runtime_mode.clone(),
-            resume,
-            yolo,
-            false,
-            None,
-        ) {
+        )
+        .with_runtime_mode(runtime_mode.clone())
+        .with_resume(resume)
+        .with_yolo(yolo);
+
+        match session_ops::open_session(&request) {
             Ok(s) => {
                 info!(
                     event = "cli.open_completed",
