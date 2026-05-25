@@ -194,10 +194,10 @@ fn read_pid_from_file_with_validation(pid_file: &Path) -> ProcessSearchResult {
                             warn!(
                                 event = "core.terminal.pid_file_process_info_failed",
                                 pid,
-                                error = %e
+                                error = %e,
+                                "PID exists but process identity metadata could not be read; process tracking disabled for this spawn"
                             );
-                            // Process exists but couldn't get info - still return PID
-                            Ok((Some(pid), None, None))
+                            Ok((None, None, None))
                         }
                     }
                 }
